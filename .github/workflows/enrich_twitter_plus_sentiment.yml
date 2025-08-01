@@ -44,8 +44,8 @@ jobs:
       # (Pandoc/headless Chrome unnecessary because the script doesn’t render PDFs)
 
       # 4 ▸ Run the enrichment script
-      - name: Run enrich_twitter_plus_sentiment.R
-        run: Rscript enrich_twitter_plus_sentiment.R
+      - name: Run enrich_twitter_sentiment.R
+        run: Rscript enrich_twitter_sentiment.R
 
       # 5 ▸ Keep artefacts (optional, helpful for debugging)
       - name: Upload run logs
@@ -54,7 +54,7 @@ jobs:
         with:
           name: enrich-log
           path: |
-            enrich_twitter_plus_sentiment.Rout
+            enrich_twitter_sentiment.Rout
             *.log
             *.txt
           if-no-files-found: ignore
