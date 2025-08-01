@@ -136,8 +136,8 @@ tweets_sent <- bind_cols(
     TRUE                  ~ "neutral"
   ))
 
-## 7 – NRC emotions (8 basic) --------------------------------------------------
-nrc_key <- lexicon::hash_nrc_emotions %>%
+# --- 7 · NRC emotions (8 basic) -------------------------------------------
+nrc_key <- lexicon::hash_nrc_emotions %>%           # unchanged …
   filter(emotion %in% c("anger","anticipation","disgust","fear",
                         "joy","sadness","surprise","trust")) %>%
   filter(!token %in% c(
@@ -148,14 +148,28 @@ emo_raw <- emotion_by(tweets_sent$clean_text, emotion_dt = nrc_key) %>%
   select(element_id, emotion_type, ave_emotion)
 
 emotions <- emo_raw %>%
-  pivot_wider(names_from = emotion_type, values_from = ave_emotion,
-              values_fill = 0)
+  pivot_wider(names_from  = emotion_type,
+              values_from = ave_emotion,
+              values_fill = 0)                                %>%
+  # ── net-out negated versions, *then drop them* ─────────────
+  mutate(
+    anger        = anger        - anger_negated,
+    anticipation = anticipation - anticipation_negated,
+    disgust      = disgust      - disgust_negated,
+    fear         = fear         - fear_negated,
+    joy          = joy          - joy_negated,
+    sadness      = sadness      - sadness_negated,
+    surprise     = surprise     - surprise_negated,
+    trust        = trust        - trust_negated
+  ) %>%
+  select(-ends_with("_negated"))          #  ← **this line removes them**
 
-## 8 – combine & final tidy frame ---------------------------------------------
+# --- 8 · combine & final tidy frame ----------------------------------------
 result <- tweets_sent %>%
   bind_cols(emotions) %>%
   select(tweet_id, ave_sentiment, sentiment,
          anger:trust, everything())
+
 
 cat("✓ sentiment & emotions computed –", nrow(result), "rows ready\n")
 
@@ -174,6 +188,7 @@ cat("✓ uploaded to table", dest_tbl, "\n")
 
 DBI::dbDisconnect(con)
 cat("✓ finished at", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+
 
 
 
