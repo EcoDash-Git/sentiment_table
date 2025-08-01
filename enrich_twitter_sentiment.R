@@ -12,8 +12,11 @@
 ## 0 – packages ----------------------------------------------------------------
 need <- c(
   "DBI", "RPostgres", "dplyr", "stringr", "tibble",
-  "tidytext", "purrr", "lubridate", "sentimentr", "lexicon", "data.table"
+  "tidytext", "tidyr",          # ← added tidyr
+  "purrr", "lubridate",
+  "sentimentr", "lexicon", "data.table"
 )
+
 new <- need[!need %in% rownames(installed.packages())]
 if (length(new))
   install.packages(new, repos = "https://cloud.r-project.org", quiet = TRUE)
@@ -171,5 +174,6 @@ cat("✓ uploaded to table", dest_tbl, "\n")
 
 DBI::dbDisconnect(con)
 cat("✓ finished at", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+
 
 
