@@ -1,0 +1,60 @@
+name: Enrich twitter_raw_plus_sentiment   # shows up in the Actions tab
+
+on:
+  workflow_dispatch:                      # manual run
+  schedule:                               # automatic run every day @ 04:15 UTC
+    - cron: "15 4 * * *"
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+
+    # ── Supabase / other secrets passed into the R session ────────────────
+    env:
+      SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
+      SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
+      SUPABASE_DB:   ${{ secrets.SUPABASE_DB }}
+      SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
+      SUPABASE_PWD:  ${{ secrets.SUPABASE_PWD }}
+      # (add MJ_* etc. here if the script later needs them)
+
+      CI: true
+      R_KEEP_PKG_SOURCE: no
+
+    steps:
+      # 1 ▸ Checkout repository
+      - uses: actions/checkout@v4
+
+      # 2 ▸ Linux libraries required by common CRAN packages
+      - name: Install system libraries
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libssl-dev libxml2-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libharfbuzz-dev  libfribidi-dev \
+            libpng-dev       libtiff5-dev libjpeg-dev \
+            libglpk40        libgmp-dev          # <─ for igraph / ggraph
+
+      # 3 ▸ Set up R (+ Posit public binary cache for faster installs)
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      # (Pandoc/headless Chrome unnecessary because the script doesn’t render PDFs)
+
+      # 4 ▸ Run the enrichment script
+      - name: Run enrich_twitter_plus_sentiment.R
+        run: Rscript enrich_twitter_plus_sentiment.R
+
+      # 5 ▸ Keep artefacts (optional, helpful for debugging)
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: enrich-log
+          path: |
+            enrich_twitter_plus_sentiment.Rout
+            *.log
+            *.txt
+          if-no-files-found: ignore
