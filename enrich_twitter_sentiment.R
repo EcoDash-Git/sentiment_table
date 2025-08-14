@@ -87,8 +87,12 @@ main_ids <- tibble::tribble(
   "Botega_AF",          "1902521779161292800",
   "samecwilliams",      "409642632",
   "TateBerenbaum",      "801518825690824707",
-  "ArweaveEco",         "892752981736779776"
+  "ArweaveEco",         "892752981736779776",
+  "outprog_ar",         "2250655424",
+  "HyMatrixOrg",        "1948283615248568320",
+  "EverVisionLabs",     "1742119960535789568"
 )
+
 
 ## 4 – basic pre-processing ----------------------------------------------------
 tweets <- twitter_raw %>%
@@ -188,6 +192,7 @@ cat("✓ uploaded to table", dest_tbl, "\n")
 
 DBI::dbDisconnect(con)
 cat("✓ finished at", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+
 
 
 
