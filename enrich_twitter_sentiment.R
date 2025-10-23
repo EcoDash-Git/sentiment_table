@@ -149,15 +149,46 @@ result <- tweets_sent %>%
 cat("✓ sentiment & emotions computed –", nrow(result), "rows ready\n")
 
 ## 7 – upload to Supabase ------------------------------------------------------
+## 7 – upload to Supabase (schema-qualified, explicit DDL) ---------------------
 dest_tbl <- "twitter_raw_plus_sentiment"
+
+# 7a) Ensure table with desired schema exists (DROP/CREATE to be explicit)
+DBI::dbExecute(con, sprintf('
+  DROP TABLE IF EXISTS public.%s;
+  CREATE TABLE public.%s (
+    tweet_id        text PRIMARY KEY,
+    tweet_url       text,
+    username        text,
+    user_id         text,
+    main_id         text,
+    date            timestamptz,
+    tweet_type      text,
+    ave_sentiment   double precision,
+    sentiment       text,
+    anger           double precision,
+    anticipation    double precision,
+    disgust         double precision,
+    fear            double precision,
+    joy             double precision,
+    sadness         double precision,
+    surprise        double precision,
+    trust           double precision,
+    clean_text      text
+  );
+', dest_tbl, dest_tbl))
+
+# 7b) Append data (now that table exists with the exact columns)
 DBI::dbWriteTable(
   con,
-  name      = dest_tbl,
+  name      = DBI::Id(schema = "public", table = dest_tbl),
   value     = as.data.frame(result),
-  overwrite = TRUE,
+  append    = TRUE,
   row.names = FALSE
 )
-cat("✓ uploaded to table", dest_tbl, "\n")
+
+cat("✓ uploaded to table public.", dest_tbl, "\n", sep = "")
+
 
 DBI::dbDisconnect(con)
 cat("✓ finished at", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+
