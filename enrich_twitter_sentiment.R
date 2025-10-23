@@ -1,199 +1,163 @@
-
-
 #!/usr/bin/env Rscript
 # ──────────────────────────────────────────────────────────────────────────────
-#  enrich_twitter_sentiment.R
+#  enrich_twitter_sentiment.R   (from twitter_raw_plus_flags → twitter_raw_plus_sentiment)
 # ──────────────────────────────────────────────────────────────────────────────
-#  1.  download  twitter_raw            (existing table)
-#  2.  compute sentiment + 8 NRC emotions
-#  3.  write     public.twitter_raw_plus_sentiment   (overwrite)
+#  1) read     public.twitter_raw_plus_flags
+#  2) compute  sentiment + 8 NRC emotions on text
+#  3) write    public.twitter_raw_plus_sentiment  (overwrite)
+#     • preserves: tweet_type, date, main_id, user_id (and other useful fields)
 # ──────────────────────────────────────────────────────────────────────────────
 
 ## 0 – packages ----------------------------------------------------------------
 need <- c(
-  "DBI", "RPostgres", "dplyr", "stringr", "tibble",
-  "tidytext", "tidyr",          # ← added tidyr
-  "purrr", "lubridate",
-  "sentimentr", "lexicon", "data.table"
+  "DBI","RPostgres","dplyr","stringr","tibble",
+  "tidytext","tidyr","purrr","lubridate",
+  "sentimentr","lexicon","data.table"
 )
-
 new <- need[!need %in% rownames(installed.packages())]
-if (length(new))
-  install.packages(new, repos = "https://cloud.r-project.org", quiet = TRUE)
+if (length(new)) install.packages(new, repos = "https://cloud.r-project.org", quiet = TRUE)
 invisible(lapply(need, library, character.only = TRUE))
 
-## 1 – Supabase credentials (taken from ENV in the GitHub Action) -------------
+## 1 – Supabase credentials ----------------------------------------------------
 creds <- Sys.getenv(
-  c("SUPABASE_HOST", "SUPABASE_PORT", "SUPABASE_DB",
-    "SUPABASE_USER", "SUPABASE_PWD"),
+  c("SUPABASE_HOST","SUPABASE_PORT","SUPABASE_DB","SUPABASE_USER","SUPABASE_PWD"),
   names = TRUE
 )
-
-if (any(!nzchar(creds)))
-  stop("❌ One or more Supabase env vars are missing – aborting.")
+if (any(!nzchar(creds))) stop("❌ One or more Supabase env vars are missing – aborting.")
 
 con <- DBI::dbConnect(
   RPostgres::Postgres(),
-  host     = Sys.getenv("SUPABASE_HOST"),
-  port     = as.integer(Sys.getenv("SUPABASE_PORT", "6543")),
-  dbname   = Sys.getenv("SUPABASE_DB",   "postgres"),
-  user     = Sys.getenv("SUPABASE_USER"),
-  password = Sys.getenv("SUPABASE_PWD"),
+  host     = creds[["SUPABASE_HOST"]],
+  port     = as.integer(creds[["SUPABASE_PORT"]] %||% "5432"),
+  dbname   = creds[["SUPABASE_DB"]]   %||% "postgres",
+  user     = creds[["SUPABASE_USER"]],
+  password = creds[["SUPABASE_PWD"]],
   sslmode  = "require"
 )
 
+`%||%` <- function(x, y) if (is.null(x) || is.na(x) || x == "") y else x
 
-## 2 – download raw tweets -----------------------------------------------------
-twitter_raw <- DBI::dbReadTable(con, "twitter_raw")
-cat("✓ downloaded", nrow(twitter_raw), "rows from twitter_raw\n")
+## 2 – download enriched base table -------------------------------------------
+src_tbl <- "twitter_raw_plus_flags"
+tweets0 <- DBI::dbReadTable(con, src_tbl)
+cat("✓ downloaded", nrow(tweets0), "rows from", src_tbl, "\n")
 
-## 3 – canonical IDs  ----------------------------------------------------------
-main_ids <- tibble::tribble(
-  ~username,            ~main_id,
-  "weave_db",           "1206153294680403968",
-  "OdyseeTeam",         "1280241715987660801",
-  "ardriveapp",         "1293193263579635712",
-  "redstone_defi",      "1294053547630362630",
-  "everpay_io",         "1334504432973848577",
-  "decentlandlabs",     "1352388512788656136",
-  "KYVENetwork",        "136377177683878784",
-  "onlyarweave",        "1393171138436534272",
-  "ar_io_network",      "1468980765211955205",
-  "Permaswap",          "1496714415231717380",
-  "communitylabs",      "1548502833401516032",
-  "usewander",          "1559946771115163651",
-  "apus_network",       "1569621659468054528",
-  "fwdresearch",        "1573616135651545088",
-  "perma_dao",          "1595075970309857280",
-  "Copus_io",           "1610731228130312194",
-  "basejumpxyz",        "1612781645588742145",
-  "AnyoneFDN",          "1626376419268784130",
-  "arweaveindia",       "1670147900033343489",
-  "useload",            "1734941279379759105",
-  "protocolland",       "1737805485326401536",
-  "aoTheComputer",      "1750584639385939968",
-  "ArweaveOasis",       "1750723327315030016",
-  "aox_xyz",            "1751903735318720512",
-  "astrousd",           "1761104764899606528",
-  "PerplexFi",          "1775862139980226560",
-  "autonomous_af",      "1777500373378322432",
-  "Liquid_Ops",         "1795772412396507136",
-  "ar_aostore",         "1797632049202794496",
-  "FusionFiPro",        "1865790600462921728",
-  "vela_ventures",      "1869466343000444928",
-  "beaconwallet",       "1879152602681585664",
-  "VentoSwap",          "1889714966321893376",
-  "permawebjournal",    "1901592191065300993",
-  "Botega_AF",          "1902521779161292800",
-  "samecwilliams",      "409642632",
-  "TateBerenbaum",      "801518825690824707",
-  "ArweaveEco",         "892752981736779776",
-  "outprog_ar",         "2250655424",
-  "HyMatrixOrg",        "1948283615248568320",
-  "EverVisionLabs",     "1742119960535789568"
-)
-
-
-## 4 – basic pre-processing ----------------------------------------------------
-tweets <- twitter_raw %>%
-  left_join(main_ids, by = "username") %>%
+# Basic sanity + keep one row per tweet_id
+tweets0 <- tweets0 %>%
+  tibble::as_tibble() %>%
   mutate(
-    is_rt_text = str_detect(text, "^RT @"),
-    tweet_type = case_when(
-      is_rt_text                                  ~ "retweet",
-      user_id == main_id & !is_rt_text &
-        str_detect(text, "https://t.co")          ~ "quote",
-      user_id == main_id                          ~ "original",
-      TRUE                                        ~ "other"
-    ),
-    publish_dt = ymd_hms(date, tz = "UTC")
+    date = case_when(
+      inherits(date, "POSIXt") ~ date,
+      TRUE ~ suppressWarnings(lubridate::ymd_hms(as.character(date), tz = "UTC"))
+    )
   ) %>%
-  arrange(publish_dt) %>%
+  arrange(date) %>%
   distinct(tweet_id, .keep_all = TRUE)
 
-## 5 – clean text for NLP ------------------------------------------------------
-tweets_clean <- tweets %>%
-  mutate(
-    clean_text = text %>%
-      str_replace_all("&amp;|&gt;|&lt;", " ") %>%
-      str_remove_all("http\\S+|@\\w+|[[:punct:]]") %>%
-      str_squish()
-  ) %>%
-  filter(str_count(clean_text, "\\w+") > 5)   # keep tweets with ≥ 6 words
+# Ensure the key columns exist (fallbacks if missing)
+if (!"tweet_type" %in% names(tweets0)) {
+  tweets0 <- tweets0 %>%
+    mutate(
+      is_rt_text = stringr::str_detect(text %||% "", "^RT @"),
+      tweet_type = dplyr::case_when(
+        is_rt_text ~ "retweet",
+        TRUE       ~ "original"
+      )
+    )
+}
+if (!"main_id" %in% names(tweets0)) tweets0$main_id <- NA_character_
 
-## 6 – sentiment polarity ------------------------------------------------------
-sent_key <- update_key(
-  lexicon::hash_sentiment_jockers_rinker,
-  x = data.frame(x = "hot", y = 1)   # custom override (optional)
+## 3 – clean text for NLP ------------------------------------------------------
+tweets_clean <- tweets0 %>%
+  transmute(
+    # keep ids & context we’ll want to carry through
+    tweet_id, tweet_url = .data[["tweet_url"]] %||% NA_character_,
+    username, user_id, main_id, date, tweet_type,
+    text_raw = text %||% ""
+  ) %>%
+  mutate(
+    clean_text = text_raw %>%
+      stringr::str_replace_all("&amp;|&gt;|&lt;", " ") %>%
+      stringr::str_remove_all("http\\S+|@\\w+|[[:punct:]]") %>%
+      stringr::str_squish()
+  ) %>%
+  # keep tweets with ≥ 6 words so the lexicons have signal
+  filter(stringr::str_count(clean_text, "\\w+") > 5)
+
+## 4 – sentiment polarity ------------------------------------------------------
+sent_key <- sentimentr::update_key(
+  lexicon::hash_sentiment_jockers_rinker
+  # , x = data.frame(x = "hot", y = 1)  # example override; keep commented unless you need it
 )
 
-polarity <- sentiment_by(get_sentences(tweets_clean$clean_text),
-                         polarity_dt = sent_key)
+polarity <- sentimentr::sentiment_by(
+  sentimentr::get_sentences(tweets_clean$clean_text),
+  polarity_dt = sent_key
+)
 
-tweets_sent <- bind_cols(
-  tweets_clean %>% select(tweet_id, clean_text),
-  polarity %>% select(element_id, ave_sentiment)
+tweets_sent <- dplyr::bind_cols(
+  tweets_clean %>% dplyr::select(tweet_id, username, user_id, main_id, date, tweet_type, tweet_url, clean_text),
+  polarity %>% dplyr::select(element_id, ave_sentiment)
 ) %>%
-  mutate(sentiment = case_when(
-    ave_sentiment >  0.00 ~ "positive",
-    ave_sentiment < -0.00 ~ "negative",
-    TRUE                  ~ "neutral"
-  ))
+  mutate(
+    sentiment = dplyr::case_when(
+      ave_sentiment >  0.00 ~ "positive",
+      ave_sentiment < -0.00 ~ "negative",
+      TRUE                  ~ "neutral"
+    )
+  )
 
-# --- 7 · NRC emotions (8 basic) -------------------------------------------
-nrc_key <- lexicon::hash_nrc_emotions %>%           # unchanged …
-  filter(emotion %in% c("anger","anticipation","disgust","fear",
-                        "joy","sadness","surprise","trust")) %>%
-  filter(!token %in% c(
-    "damn","damned","dammit","goddamn","heck","fuck","fucks","crazy","shit"
-  ))
+## 5 – NRC emotions (8 basic) --------------------------------------------------
+nrc_key <- lexicon::hash_nrc_emotions %>%
+  dplyr::filter(emotion %in% c("anger","anticipation","disgust","fear","joy","sadness","surprise","trust")) %>%
+  dplyr::filter(!token %in% c("damn","damned","dammit","goddamn","heck","fuck","fucks","crazy","shit"))
 
-emo_raw <- emotion_by(tweets_sent$clean_text, emotion_dt = nrc_key) %>%
-  select(element_id, emotion_type, ave_emotion)
+emo_raw <- sentimentr::emotion_by(tweets_sent$clean_text, emotion_dt = nrc_key) %>%
+  dplyr::select(element_id, emotion_type, ave_emotion)
 
 emotions <- emo_raw %>%
-  pivot_wider(names_from  = emotion_type,
-              values_from = ave_emotion,
-              values_fill = 0)                                %>%
-  # ── net-out negated versions, *then drop them* ─────────────
-  mutate(
-    anger        = anger        - anger_negated,
-    anticipation = anticipation - anticipation_negated,
-    disgust      = disgust      - disgust_negated,
-    fear         = fear         - fear_negated,
-    joy          = joy          - joy_negated,
-    sadness      = sadness      - sadness_negated,
-    surprise     = surprise     - surprise_negated,
-    trust        = trust        - trust_negated
+  tidyr::pivot_wider(
+    names_from  = emotion_type,
+    values_from = ave_emotion,
+    values_fill = 0
   ) %>%
-  select(-ends_with("_negated"))          #  ← **this line removes them**
+  # net-out negated versions (if present), then drop the *_negated columns
+  mutate(
+    dplyr::across(
+      c("anger","anticipation","disgust","fear","joy","sadness","surprise","trust"),
+      \(col) {
+        pos <- get(col, inherits = FALSE)
+        neg_name <- paste0(col, "_negated")
+        neg <- if (exists(neg_name)) get(neg_name, inherits = FALSE) else 0
+        pos - neg
+      }
+    )
+  ) %>%
+  dplyr::select(-tidyselect::ends_with("_negated"), tidyselect::everything())
 
-# --- 8 · combine & final tidy frame ----------------------------------------
+## 6 – combine & final tidy frame ---------------------------------------------
 result <- tweets_sent %>%
-  bind_cols(emotions) %>%
-  select(tweet_id, ave_sentiment, sentiment,
-         anger:trust, everything())
-
+  dplyr::bind_cols(emotions) %>%
+  # Reorder/keep the context columns up front (explicitly including the ones you asked for)
+  dplyr::select(
+    tweet_id, tweet_url, username, user_id, main_id, date, tweet_type,
+    ave_sentiment, sentiment,
+    anger, anticipation, disgust, fear, joy, sadness, surprise, trust,
+    clean_text
+  )
 
 cat("✓ sentiment & emotions computed –", nrow(result), "rows ready\n")
 
-## 9 – upload to Supabase ------------------------------------------------------
-dest_tbl <- "twitter_raw_plus_sentiment"   # ← unchanged table name
-
+## 7 – upload to Supabase ------------------------------------------------------
+dest_tbl <- "twitter_raw_plus_sentiment"
 DBI::dbWriteTable(
   con,
-  name      = dest_tbl,                    # no schema prefix
+  name      = dest_tbl,
   value     = as.data.frame(result),
-  overwrite = TRUE,                        # overwrite each run
+  overwrite = TRUE,
   row.names = FALSE
 )
-
 cat("✓ uploaded to table", dest_tbl, "\n")
 
 DBI::dbDisconnect(con)
 cat("✓ finished at", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
-
-
-
-
-
